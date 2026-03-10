@@ -1,10 +1,12 @@
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector]
 }
 
 model Chat {
@@ -28,4 +30,13 @@ model Message {
   chat             Chat     @relation(fields: [chat_id], references: [id], onDelete: Cascade)
 
   @@map("messages")
+}
+
+model Document {
+  id        String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  content   String
+  metadata  Json?
+  embedding Unsupported("vector(1536)")?
+
+  @@map("documents")
 }

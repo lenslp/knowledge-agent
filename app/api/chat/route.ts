@@ -3,7 +3,11 @@ import { TavilySearch } from "@langchain/tavily";
 import { createToolCallingAgent, AgentExecutor } from "@langchain/classic/agents";
 import { ChatPromptTemplate } from "@langchain/core/prompts";
 import { DynamicStructuredTool } from "@langchain/core/tools";
+import { Embeddings } from "@langchain/core/embeddings";
+import { SupabaseVectorStore } from "@langchain/community/vectorstores/supabase";
+import { createClient } from "@supabase/supabase-js";
 import { LangChainAdapter } from "ai";
+import { z } from "zod";
 
 import { prisma } from "../../../lib/prisma";
 
@@ -43,7 +47,68 @@ export async function POST(req: Request) {
                 return JSON.stringify(result);
             }
         });
-        const tools = [searchTool];
+
+        // 2.5 构建 RAG 知识库专用检索工具
+        const knowledgeSearchTool = new DynamicStructuredTool({
+            name: "knowledge_search",
+            description: "用于在内部知识库、私有机密文件和公司介绍中搜索信息。当你被问到公司报销政策、WiFi密码、内部规章等私人/内部信息时，必须使用此工具。",
+            schema: z.object({
+                query: z.string().describe("要在知识库中检索的关键词或短语，应当尽量精准并贴合原文可能出现的用词"),
+            }),
+            func: async ({ query }) => {
+                const supabaseClient = createClient(
+                    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+                    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+                );
+
+                class CustomMiniMaxEmbeddings extends Embeddings {
+                    async embedDocuments(texts: string[]): Promise<number[][]> {
+                        const results: number[][] = [];
+                        for (const text of texts) {
+                            const res = await this.embedQuery(text);
+                            results.push(res);
+                        }
+                        return results;
+                    }
+                    async embedQuery(text: string): Promise<number[]> {
+                        const response = await fetch("https://api.minimaxi.com/v1/embeddings", {
+                            method: "POST",
+                            headers: {
+                                "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
+                                "Content-Type": "application/json"
+                            },
+                            body: JSON.stringify({
+                                model: "embo-01",
+                                texts: [text],
+                                type: "db"
+                            })
+                        });
+                        const data = await response.json();
+                        if (!data.vectors || !data.vectors[0]) {
+                            throw new Error(`MiniMax API error: ${JSON.stringify(data)}`);
+                        }
+                        return data.vectors[0];
+                    }
+                }
+                const vectorStore = new SupabaseVectorStore(
+                    new CustomMiniMaxEmbeddings({}),
+                    {
+                        client: supabaseClient,
+                        tableName: "documents",
+                        queryName: "match_documents",
+                    }
+                );
+
+                // 检索最相关的 3 个文档块
+                const relevantDocs = await vectorStore.similaritySearch(query, 3);
+                if (relevantDocs.length === 0) {
+                    return "知识库中未找到相关信息，请直接告知用户或尝试换个关键词搜索。";
+                }
+                return relevantDocs.map((doc, idx) => `片段 ${idx + 1}:\n${doc.pageContent}`).join("\n\n---\n\n");
+            }
+        });
+
+        const tools = [searchTool, knowledgeSearchTool];
 
         // 3. 动态时间并构建 Prompt
         const currentDate = new Date().toLocaleDateString("zh-CN", {
