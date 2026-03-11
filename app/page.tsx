@@ -1,11 +1,17 @@
 "use client";
 
 import { useChat } from "ai/react";
-import { Send, Bot, User, Loader2, Sparkles, Globe, Menu, Plus, MessageSquare, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { Send, Bot, User, Loader2, Sparkles, Globe, Menu, Plus, MessageSquare, PanelLeftClose, PanelLeftOpen, BookOpen } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
+import "katex/dist/katex.min.css";
+import MermaidChart from "./components/MermaidChart";
 
 export default function ChatPage() {
     // Supabase client creation is usually done in a util, but for client components we can use createBrowserClient if we installed it.
@@ -15,11 +21,19 @@ export default function ChatPage() {
     const [isSidebarOpen, setIsSidebarOpen] = useState(true);
     const [activeChatId, setActiveChatId] = useState<string | null>(null);
 
-    const { messages, setMessages, input, handleInputChange, handleSubmit, isLoading } =
+    const { messages, setMessages, input, handleInputChange, handleSubmit, isLoading, data, stop } =
         useChat({
             api: "/api/chat",
             body: {
                 chatId: activeChatId
+            },
+            onResponse: (response) => {
+                const newChatId = response.headers.get("x-chat-id");
+                if (newChatId && newChatId !== activeChatId) {
+                    setActiveChatId(newChatId);
+                    // 立即刷新侧边栏以免等待对话结束才显示
+                    fetchChats();
+                }
             },
             onFinish: () => {
                 // Refresh chats list after a message finishes so new chats appear in sidebar
@@ -154,7 +168,7 @@ export default function ChatPage() {
 
                 {/* 聊天内容区 */}
                 <main className="flex-1 overflow-y-auto w-full p-4 sm:p-8 space-y-6 scroll-smooth">
-                    <div className="max-w-4xl mx-auto space-y-8 pb-32">
+                    <div className="max-w-3xl mx-auto space-y-8 pb-32">
                         {messages.length === 0 ? (
                             <motion.div
                                 initial={{ opacity: 0, y: 20 }}
@@ -201,23 +215,62 @@ export default function ChatPage() {
                                         </div>
 
                                         <div
-                                            className={`max-w-[85%] sm:max-w-[75%] rounded-2xl px-5 py-3.5 font-normal leading-relaxed text-[15px] ${m.role === "user"
+                                            className={`min-w-0 max-w-[85%] sm:max-w-[85%] rounded-2xl px-5 py-3.5 font-normal leading-relaxed text-[15px] ${m.role === "user"
                                                 ? "bg-[#2d2c25] text-[#ececec] border border-white/5"
                                                 : "text-[#ececec]"
                                                 }`}
                                         >
-                                            {/* Tool 调用可视化气泡 (Vercel SDK 内部支持) */}
-                                            {m.toolInvocations?.map((toolInvocation) => (
-                                                <div key={toolInvocation.toolCallId} className="mb-3 p-3 rounded-xl bg-black/30 border border-indigo-500/20 flex flex-col gap-1.5 text-xs text-indigo-300 font-mono">
-                                                    <div className="flex items-center gap-2">
-                                                        <Globe className="w-3.5 h-3.5 text-indigo-400 animate-pulse" />
-                                                        <span className="font-bold">Agent Tool Triggered: {toolInvocation.toolName}</span>
-                                                    </div>
-                                                    <div className="text-gray-400 break-words opacity-80">
-                                                        {JSON.stringify(toolInvocation.args)}
-                                                    </div>
-                                                </div>
-                                            ))}
+                                            {/* Tool 调用可视化气泡 (拦截的 streamEvents 状态) */}
+                                            {(() => {
+                                                if (!m.annotations || m.annotations.length === 0) return null;
+                                                
+                                                // 按照 id 进行去重分组，保留最新的状态
+                                                // 当一个工具拥有 running 和 complete 两个状态时，只展示 complete
+                                                const toolCallsMap = new Map();
+                                                m.annotations.forEach((annotation: any) => {
+                                                    if (annotation && annotation.type === "tool_call" && annotation.id) {
+                                                        // 如果当前已存的是 running 且新来的是 complete，则覆盖
+                                                        // 否则直接存入
+                                                        const existing = toolCallsMap.get(annotation.id);
+                                                        if (!existing || existing.status === "running") {
+                                                            toolCallsMap.set(annotation.id, annotation);
+                                                        }
+                                                    }
+                                                });
+
+                                                return Array.from(toolCallsMap.values()).map((annotation: any, index) => {
+                                                    const isSearch = annotation.toolName?.includes("search");
+                                                    const isKnowledge = annotation.toolName?.includes("knowledge");
+                                                    const isRunning = annotation.status === "running";
+                                                    
+                                                    return (
+                                                        <motion.div 
+                                                            key={`${annotation.id}-${index}`}
+                                                            initial={{ opacity: 0, height: 0, marginBottom: 0 }}
+                                                            animate={{ opacity: 1, height: "auto", marginBottom: 12 }}
+                                                            className="p-3 rounded-xl bg-black/40 border border-white/10 flex flex-col gap-2 text-xs text-white/80 font-mono shadow-inner backdrop-blur-sm"
+                                                        >
+                                                            <div className="flex items-center gap-2">
+                                                                {isKnowledge ? (
+                                                                    <BookOpen className={`w-4 h-4 ${isRunning ? "text-indigo-400 animate-pulse" : "text-emerald-400"}`} />
+                                                                ) : (
+                                                                    <Globe className={`w-4 h-4 ${isRunning ? "text-blue-400 animate-pulse" : "text-emerald-400"}`} />
+                                                                )}
+                                                                <span className="font-semibold text-white/90">
+                                                                    {isRunning ? "Agent is calling " : "Agent called "}
+                                                                    <span className={isKnowledge ? "text-indigo-300" : "text-blue-300"}>{annotation.toolName}</span>
+                                                                </span>
+                                                                {!isRunning && <span className="ml-auto text-emerald-400 text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-400/10 border border-emerald-400/20">SUCCESS</span>}
+                                                            </div>
+                                                            {annotation.toolInput && isRunning && (
+                                                                <div className="text-gray-400 break-words opacity-70 mt-1 pl-6">
+                                                                    Input: {JSON.stringify(annotation.toolInput)}
+                                                                </div>
+                                                            )}
+                                                        </motion.div>
+                                                    );
+                                                });
+                                            })()}
                                             {m.role === "user" ? (
                                                 <div className="whitespace-pre-wrap">{m.content}</div>
                                             ) : (
@@ -256,15 +309,53 @@ export default function ChatPage() {
                                                             {mainContent && (
                                                                 <div className="prose prose-invert prose-sm sm:prose-base max-w-none 
                                                                     prose-p:leading-relaxed prose-p:mb-3 
-                                                                    prose-pre:bg-black/40 prose-pre:border prose-pre:border-white/10 prose-pre:backdrop-blur-xl prose-pre:shadow-2xl 
+                                                                    prose-pre:bg-transparent prose-pre:p-0
                                                                     prose-code:text-blue-300 prose-code:bg-blue-500/10 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded-md prose-code:before:content-none prose-code:after:content-none
                                                                     prose-a:text-blue-400 prose-a:no-underline hover:prose-a:underline
                                                                     prose-strong:text-white prose-strong:font-semibold
                                                                     prose-ul:list-disc prose-ol:list-decimal prose-li:my-1
                                                                     prose-headings:text-white prose-headings:font-bold prose-headings:mb-4
+                                                                    prose-blockquote:border-l-teal-400/60 prose-blockquote:bg-teal-500/5 prose-blockquote:rounded-r-lg prose-blockquote:px-4 prose-blockquote:py-2 prose-blockquote:text-teal-300/90 prose-blockquote:text-sm prose-blockquote:not-italic
+                                                                    prose-table:text-sm prose-thead:text-gray-300 prose-th:border prose-th:border-white/20 prose-th:bg-white/5 prose-th:px-3 prose-th:py-2 prose-td:border prose-td:border-white/10 prose-td:px-3 prose-td:py-2
                                                                     break-words"
                                                                 >
-                                                                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                                                    <ReactMarkdown 
+                                                                        remarkPlugins={[remarkGfm, remarkMath]}
+                                                                        rehypePlugins={[rehypeKatex]}
+                                                                        components={{
+                                                                            code({ node, className, children, ...props }: any) {
+                                                                                const match = /language-(\w+)/.exec(className || '');
+                                                                                const lang = match?.[1];
+                                                                                const isInline = !className;
+
+                                                                                // Mermaid 图表渲染
+                                                                                if (lang === 'mermaid') {
+                                                                                    return <MermaidChart chart={String(children).replace(/\n$/, '')} />;
+                                                                                }
+
+                                                                                return !isInline && match ? (
+                                                                                    <SyntaxHighlighter
+                                                                                        style={oneDark}
+                                                                                        language={lang}
+                                                                                        PreTag="div"
+                                                                                        customStyle={{
+                                                                                            margin: '0.75rem 0',
+                                                                                            borderRadius: '0.75rem',
+                                                                                            border: '1px solid rgba(255,255,255,0.1)',
+                                                                                            fontSize: '0.85rem',
+                                                                                        }}
+                                                                                        {...props}
+                                                                                    >
+                                                                                        {String(children).replace(/\n$/, '')}
+                                                                                    </SyntaxHighlighter>
+                                                                                ) : (
+                                                                                    <code className={className} {...props}>
+                                                                                        {children}
+                                                                                    </code>
+                                                                                );
+                                                                            }
+                                                                        }}
+                                                                    >
                                                                         {mainContent}
                                                                     </ReactMarkdown>
                                                                 </div>
@@ -304,7 +395,7 @@ export default function ChatPage() {
                         <div className="absolute inset-0 -bottom-8 rounded-[2rem] bg-gradient-to-t from-black/80 via-black/40 to-transparent blur-2xl pointer-events-none"></div>
 
                         <form
-                            onSubmit={handleSubmit}
+                            onSubmit={isLoading ? (e) => { e.preventDefault(); stop(); } : handleSubmit}
                             className="relative flex items-center w-full rounded-2xl overflow-hidden bg-[#2f2e27] transition duration-300 border border-white/5 focus-within:border-white/20"
                         >
                             <input
@@ -312,13 +403,28 @@ export default function ChatPage() {
                                 value={input}
                                 placeholder="How can I help you today?"
                                 onChange={handleInputChange}
+                                disabled={isLoading}
                             />
                             <button
                                 type="submit"
-                                disabled={isLoading || !input}
-                                className="m-2 p-2 rounded-lg bg-[#534032] hover:bg-[#6c5442] transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-[#d48c66]"
+                                className={`m-2 p-2 rounded-lg transition-all relative ${
+                                    isLoading
+                                        ? "bg-white/10 hover:bg-white/20 text-white"
+                                        : "bg-[#534032] hover:bg-[#6c5442] text-[#d48c66] disabled:opacity-50 disabled:cursor-not-allowed"
+                                }`}
+                                disabled={!isLoading && !input}
                             >
-                                <Send className="w-4 h-4" />
+                                {isLoading ? (
+                                    <>
+                                        {/* Claude 风格：外圆进度环 + 中间方形 Stop 图标 */}
+                                        <span className="absolute inset-0 rounded-lg border-2 border-white/30 animate-ping" />
+                                        <svg className="w-4 h-4 relative z-10" viewBox="0 0 16 16" fill="currentColor">
+                                            <rect x="3" y="3" width="10" height="10" rx="2" />
+                                        </svg>
+                                    </>
+                                ) : (
+                                    <Send className="w-4 h-4" />
+                                )}
                             </button>
                         </form>
                     </div>

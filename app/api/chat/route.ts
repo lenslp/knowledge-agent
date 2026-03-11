@@ -1,3 +1,4 @@
+import * as path from "path";
 import { ChatOpenAI } from "@langchain/openai";
 import { TavilySearch } from "@langchain/tavily";
 import { createToolCallingAgent, AgentExecutor } from "@langchain/classic/agents";
@@ -6,7 +7,7 @@ import { DynamicStructuredTool } from "@langchain/core/tools";
 import { Embeddings } from "@langchain/core/embeddings";
 import { SupabaseVectorStore } from "@langchain/community/vectorstores/supabase";
 import { createClient } from "@supabase/supabase-js";
-import { LangChainAdapter } from "ai";
+import { LangChainAdapter, StreamData } from "ai";
 import { z } from "zod";
 
 import { prisma } from "../../../lib/prisma";
@@ -104,7 +105,12 @@ export async function POST(req: Request) {
                 if (relevantDocs.length === 0) {
                     return "知识库中未找到相关信息，请直接告知用户或尝试换个关键词搜索。";
                 }
-                return relevantDocs.map((doc, idx) => `片段 ${idx + 1}:\n${doc.pageContent}`).join("\n\n---\n\n");
+                return relevantDocs.map((doc, idx) => {
+                    const source = doc.metadata?.source
+                        ? path.basename(doc.metadata.source)
+                        : "未知来源";
+                    return `片段 ${idx + 1}（来源：${source}）:\n${doc.pageContent}`;
+                }).join("\n\n---\n\n") + "\n\n⚠️ 请你在回答的最后，务必原样附上以下引用来源行：\n> 📄 来源：" + [...new Set(relevantDocs.map(doc => doc.metadata?.source ? path.basename(doc.metadata.source) : "未知来源"))].join(", ");
             }
         });
 
@@ -121,7 +127,15 @@ export async function POST(req: Request) {
         const prompt = ChatPromptTemplate.fromMessages([
             ["system", `你是一个强大且乐于助人的AI助手。
 当前时间是：${currentDate}。
-如果有任何关于实时性要求高的问题，请务必使用工具进行联网检索解答，确保信息是最新的。`],
+如果有任何关于实时性要求高的问题，请务必使用工具进行联网检索解答，确保信息是最新的。
+当你使用 knowledge_search 工具获取到知识库信息时，请在回答末尾附上引用来源，格式如下：
+> 📄 来源：文件名1, 文件名2
+请务必保留此引用格式，帮助用户追溯信息出处。
+当需要绘制流程图、架构图、时序图等图表时，请始终使用 Mermaid 语法，格式如下：
+\`\`\`mermaid
+图表内容
+\`\`\`
+不要使用 ASCII 字符、竖线或文本来绘制图表。`],
             // 使用数组直接映射 messages 到 LangChain 的对应 message
             ["placeholder", "{chat_history}"],
             ["user", "{input}"],
@@ -175,8 +189,74 @@ export async function POST(req: Request) {
             { version: "v2" }
         );
 
+        // 创建自定义的 StreamData 对象，用于在流中注入事件
+        const data = new StreamData();
+
+        // 创建一个拦截器函数处理 streamEvents 并注入工具状态
+        // LangChainAdapter.toDataStreamResponse 期望一个 ReadableStream
+        function interceptStream() {
+            const iterator = stream[Symbol.asyncIterator]();
+            let dataClosed = false;
+            const closeData = () => {
+                if (dataClosed) return Promise.resolve();
+                dataClosed = true;
+                return data.close();
+            };
+            return new ReadableStream({
+                async pull(controller) {
+                    try {
+                        const { value: event, done } = await iterator.next();
+                        if (done) {
+                            await closeData();
+                            controller.close();
+                            return;
+                        }
+
+                        // 如果是工具调用开始
+                        if (event.event === "on_tool_start") {
+                            data.appendMessageAnnotation({
+                                type: "tool_call",
+                                toolName: event.name,
+                                status: "running",
+                                toolInput: event.data?.input,
+                                id: event.run_id
+                            });
+                        }
+                        
+                        // 如果是工具调用结束
+                        if (event.event === "on_tool_end") {
+                            data.appendMessageAnnotation({
+                                type: "tool_call",
+                                toolName: event.name,
+                                status: "complete",
+                                toolOutput: typeof event.data?.output === 'string' 
+                                    ? event.data.output.substring(0, 200) + '...' // 截断过长的输出
+                                    : 'Tool completed',
+                                id: event.run_id
+                            });
+                        }
+
+                        // 继续产生原有的事件让 LangChainAdapter 处理
+                        controller.enqueue(event);
+                    } catch (error) {
+                        controller.error(error);
+                    }
+                },
+                cancel() {
+                    // .catch() 必须用在 Promise 上，thread-safe guard 避免重复关闭
+                    closeData().catch(() => {});
+                }
+            });
+        }
+
         // 7. 使用 Vercel 提供的 LangChainAdapter，并在 onFinal 回调中保存 AI 回复
-        return LangChainAdapter.toDataStreamResponse(stream, {
+        return LangChainAdapter.toDataStreamResponse(interceptStream(), {
+            data,
+            init: {
+                headers: {
+                    "X-Chat-Id": activeChatId
+                }
+            },
             callbacks: {
                 async onFinal(completion) {
                     // 当流完全结束后，将 AI 回复（或者工具调用的总结结果）存储到数据库中
