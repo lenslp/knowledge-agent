@@ -49,10 +49,10 @@ export async function POST(req: Request) {
             }
         });
 
-        // 2.5 构建 RAG 知识库专用检索工具
+        // 2.5 构建 RAG 知识库专用检索工具（优先于联网搜索）
         const knowledgeSearchTool = new DynamicStructuredTool({
             name: "knowledge_search",
-            description: "用于在内部知识库、私有机密文件和公司介绍中搜索信息。当你被问到公司报销政策、WiFi密码、内部规章等私人/内部信息时，必须使用此工具。",
+            description: "在本地知识库中搜索用户上传的文档内容。适用于：产品教程、软件用法、文档说明、公司内部规章、报销政策等。当用户问的是知识库中可能存在的主题（如某产品的玩法/教程/介绍）时，必须优先使用此工具。若知识库无结果，再考虑联网搜索。",
             schema: z.object({
                 query: z.string().describe("要在知识库中检索的关键词或短语，应当尽量精准并贴合原文可能出现的用词"),
             }),
@@ -100,8 +100,13 @@ export async function POST(req: Request) {
                     }
                 );
 
-                // 检索最相关的 3 个文档块
-                const relevantDocs = await vectorStore.similaritySearch(query, 3);
+                // 检索候选文档（多取一些以便按阈值过滤）
+                const SIMILARITY_THRESHOLD = 0.7; // 相似度阈值，低于此值的视为不相关
+                const candidates = await vectorStore.similaritySearchWithScore(query, 10);
+                const relevantDocs = candidates
+                    .filter(([, score]) => score >= SIMILARITY_THRESHOLD)
+                    .map(([doc]) => doc)
+                    .slice(0, 5); // 过滤后最多保留 5 条
                 if (relevantDocs.length === 0) {
                     return "知识库中未找到相关信息，请直接告知用户或尝试换个关键词搜索。";
                 }
@@ -114,7 +119,7 @@ export async function POST(req: Request) {
             }
         });
 
-        const tools = [searchTool, knowledgeSearchTool];
+        const tools = [knowledgeSearchTool, searchTool]; // 知识库优先
 
         // 3. 动态时间并构建 Prompt
         const currentDate = new Date().toLocaleDateString("zh-CN", {
@@ -127,7 +132,7 @@ export async function POST(req: Request) {
         const prompt = ChatPromptTemplate.fromMessages([
             ["system", `你是一个强大且乐于助人的AI助手。
 当前时间是：${currentDate}。
-如果有任何关于实时性要求高的问题，请务必使用工具进行联网检索解答，确保信息是最新的。
+【重要】优先使用 knowledge_search 检索知识库：用户问的产品教程、软件用法、文档说明等，若知识库中可能包含，必须先查知识库。只有知识库无结果或问题明显需要最新实时信息时，才使用联网搜索。
 当你使用 knowledge_search 工具获取到知识库信息时，请在回答末尾附上引用来源，格式如下：
 > 📄 来源：文件名1, 文件名2
 请务必保留此引用格式，帮助用户追溯信息出处。
@@ -152,6 +157,7 @@ export async function POST(req: Request) {
         const agentExecutor = new AgentExecutor({
             agent,
             tools,
+            maxIterations: 5, // 限制工具调用轮数，避免反复调用同一工具
         });
 
         // 5. 将前端传入的 Vercel AI Messages 格式化为 LangChain 识别的历史消息

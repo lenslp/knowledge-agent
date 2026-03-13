@@ -1,7 +1,8 @@
 "use client";
 
 import { useChat } from "ai/react";
-import { Send, Bot, User, Loader2, Sparkles, Globe, Menu, Plus, MessageSquare, PanelLeftClose, PanelLeftOpen, BookOpen } from "lucide-react";
+import Link from "next/link";
+import { Send, Bot, User, Loader2, Sparkles, Globe, Menu, Plus, MessageSquare, PanelLeftClose, PanelLeftOpen, BookOpen, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import ReactMarkdown from "react-markdown";
@@ -20,6 +21,8 @@ export default function ChatPage() {
     const [chats, setChats] = useState<{ id: string, title: string, created_at: string }[]>([]);
     const [isSidebarOpen, setIsSidebarOpen] = useState(true);
     const [activeChatId, setActiveChatId] = useState<string | null>(null);
+    const [pendingDeleteChatId, setPendingDeleteChatId] = useState<string | null>(null);
+    const [isDeletingChat, setIsDeletingChat] = useState(false);
 
     const { messages, setMessages, input, handleInputChange, handleSubmit, isLoading, data, stop } =
         useChat({
@@ -83,6 +86,33 @@ export default function ChatPage() {
         }
     };
 
+    const deleteChat = async (e: React.MouseEvent, chatId: string) => {
+        e.stopPropagation();
+        setIsDeletingChat(true);
+        try {
+            const res = await fetch(`/api/chats/${chatId}`, { method: "DELETE" });
+            if (!res.ok) {
+                const data = await res.json().catch(() => ({}));
+                throw new Error(data?.error || "删除失败");
+            }
+            setChats((prev) => prev.filter((c) => c.id !== chatId));
+            if (activeChatId === chatId) {
+                setActiveChatId(null);
+                setMessages([]);
+            }
+            setPendingDeleteChatId(null);
+        } catch (err) {
+            console.error("Delete chat error:", err);
+        } finally {
+            setIsDeletingChat(false);
+        }
+    };
+
+    const confirmDeleteChat = (e: React.MouseEvent, chatId: string) => {
+        e.stopPropagation();
+        setPendingDeleteChatId(chatId);
+    };
+
     const messagesEndRef = useRef<HTMLDivElement>(null);
 
     // Auto-scroll to bottom when new messages arrive
@@ -103,9 +133,14 @@ export default function ChatPage() {
                         className="h-full bg-[#1e1e19] border-r border-white/5 flex flex-col overflow-hidden flex-shrink-0 z-20"
                     >
                         <div className="p-4 flex flex-col gap-5 w-[280px] h-full">
-                            <button onClick={() => switchChat(null)} className="w-full p-2.5 rounded-lg bg-white/5 hover:bg-white/10 transition-colors text-[#ececec] text-sm flex items-center justify-center gap-2 font-medium border border-white/5">
-                                <Plus className="w-4 h-4" /> 新建对话
-                            </button>
+                            <div className="flex gap-2">
+                                <button onClick={() => switchChat(null)} className="flex-1 p-2.5 rounded-lg bg-white/5 hover:bg-white/10 transition-colors text-[#ececec] text-sm flex items-center justify-center gap-2 font-medium border border-white/5">
+                                    <Plus className="w-4 h-4" /> 新建对话
+                                </button>
+                                <Link href="/knowledge" className="p-2.5 rounded-lg bg-white/5 hover:bg-white/10 transition-colors text-[#ececec] text-sm flex items-center justify-center gap-2 font-medium border border-white/5" title="知识库管理">
+                                    <BookOpen className="w-4 h-4" />
+                                </Link>
+                            </div>
 
                             <div className="flex flex-col flex-1 overflow-hidden">
                                 <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-1 mb-3">历史记录</h2>
@@ -123,17 +158,69 @@ export default function ChatPage() {
                                                 <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-indigo-500 rounded-r-full"></div>
                                             )}
                                             <MessageSquare className={`w-4 h-4 mt-0.5 flex-shrink-0 ${activeChatId === chat.id ? "text-indigo-400" : "opacity-70"}`} />
-                                            <div className="flex-1 overflow-hidden">
+                                            <div className="flex-1 min-w-0 overflow-hidden">
                                                 <p className={`truncate ${activeChatId === chat.id ? "font-medium text-white" : ""}`}>{chat.title}</p>
                                                 <p className={`text-xs mt-1 ${activeChatId === chat.id ? "text-blue-300/60" : "text-gray-500"}`}>
                                                     {new Date(chat.created_at).toLocaleDateString()}
                                                 </p>
                                             </div>
+                                            <button
+                                                type="button"
+                                                onClick={(e) => confirmDeleteChat(e, chat.id)}
+                                                className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg hover:bg-red-500/20 text-gray-400 hover:text-red-300 transition-opacity flex-shrink-0"
+                                                title="删除对话"
+                                            >
+                                                <Trash2 className="w-4 h-4" />
+                                            </button>
                                         </div>
                                     ))}
                                 </div>
                             </div>
                         </div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* 删除确认弹框 */}
+            <AnimatePresence>
+                {pendingDeleteChatId && (
+                    <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+                        onClick={() => setPendingDeleteChatId(null)}
+                    >
+                        <motion.div
+                            initial={{ scale: 0.95, opacity: 0 }}
+                            animate={{ scale: 1, opacity: 1 }}
+                            exit={{ scale: 0.95, opacity: 0 }}
+                            className="rounded-2xl bg-[#2f2e27] border border-white/10 shadow-xl max-w-sm w-full p-6"
+                            onClick={(e) => e.stopPropagation()}
+                        >
+                            <p className="text-[#e7e7e4] font-medium mb-1">删除对话</p>
+                            <p className="text-sm text-gray-400 mb-6">
+                                确定要删除「{chats.find((c) => c.id === pendingDeleteChatId)?.title || "该对话"}」吗？删除后无法恢复。
+                            </p>
+                            <div className="flex gap-3 justify-end">
+                                <button
+                                    type="button"
+                                    onClick={() => setPendingDeleteChatId(null)}
+                                    className="px-4 py-2 rounded-lg text-gray-400 hover:bg-white/10 transition-colors"
+                                >
+                                    取消
+                                </button>
+                                <button
+                                    type="button"
+                                    disabled={isDeletingChat}
+                                    onClick={(e) => { if (pendingDeleteChatId) deleteChat(e, pendingDeleteChatId); }}
+                                    className="px-4 py-2 rounded-lg bg-red-500/20 text-red-300 hover:bg-red-500/30 border border-red-500/30 transition-colors flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+                                >
+                                    {isDeletingChat ? <Loader2 className="w-4 h-4 animate-spin shrink-0" /> : null}
+                                    {isDeletingChat ? "删除中..." : "删除"}
+                                </button>
+                            </div>
+                        </motion.div>
                     </motion.div>
                 )}
             </AnimatePresence>

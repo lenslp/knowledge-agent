@@ -38,3 +38,12 @@ model Document {
 
   @@map("documents")
 }
+
+model DocumentManifest {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  source     String   @unique
+  file_hash  String
+  updated_at DateTime @default(now()) @db.Timestamptz(6)
+
+  @@map("document_manifests")
+}

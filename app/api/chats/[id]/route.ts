@@ -19,8 +19,33 @@ export async function GET(
         });
 
         return NextResponse.json(data);
-    } catch (err: any) {
+    } catch (err: unknown) {
         console.error("Error fetching messages:", err);
-        return NextResponse.json({ error: err.message }, { status: 500 });
+        return NextResponse.json(
+            { error: err instanceof Error ? err.message : "Failed to fetch" },
+            { status: 500 }
+        );
+    }
+}
+
+export async function DELETE(
+    _request: Request,
+    { params }: { params: Promise<{ id: string }> }
+) {
+    try {
+        const { id: chatId } = await params;
+        if (!chatId) {
+            return NextResponse.json({ error: "No chat ID provided" }, { status: 400 });
+        }
+        await prisma.chat.delete({
+            where: { id: chatId },
+        });
+        return NextResponse.json({ ok: true });
+    } catch (err: unknown) {
+        console.error("Error deleting chat:", err);
+        return NextResponse.json(
+            { error: err instanceof Error ? err.message : "Failed to delete" },
+            { status: 500 }
+        );
     }
 }
