@@ -110,15 +110,19 @@ export function getTextSplitter() {
     return textSplitter;
 }
 
-/** 千问 text-embedding-v3 嵌入，供 ingest 与 API 共用 */
+/** 向量嵌入模型，通过环境变量配置，默认兼容千问 text-embedding-v3 */
 export class CustomMiniMaxEmbeddings extends Embeddings {
     private apiKey: string;
     private baseUrl: string;
+    private model: string;
+    private dimensions: number;
 
     constructor(apiKey?: string) {
         super({});
-        this.apiKey = apiKey ?? process.env.OPENAI_API_KEY ?? "";
-        this.baseUrl = process.env.OPENAI_BASE_URL ?? "https://dashscope.aliyuncs.com/compatible-mode/v1";
+        this.apiKey = apiKey ?? process.env.EMBEDDING_API_KEY ?? process.env.OPENAI_API_KEY ?? "";
+        this.baseUrl = process.env.EMBEDDING_BASE_URL ?? process.env.OPENAI_BASE_URL ?? "https://api.openai.com/v1";
+        this.model = process.env.EMBEDDING_MODEL ?? "text-embedding-v3";
+        this.dimensions = parseInt(process.env.EMBEDDING_DIMENSIONS ?? "1024", 10);
     }
 
     async embedDocuments(texts: string[]): Promise<number[][]> {
@@ -131,18 +135,21 @@ export class CustomMiniMaxEmbeddings extends Embeddings {
     }
 
     async embedQuery(text: string): Promise<number[]> {
+        const body: Record<string, unknown> = {
+            model: this.model,
+            input: text,
+            encoding_format: "float",
+        };
+        // 仅在配置了 dimensions 时传入（部分模型不支持此参数）
+        if (this.dimensions) body.dimensions = this.dimensions;
+
         const response = await fetch(`${this.baseUrl}/embeddings`, {
             method: "POST",
             headers: {
                 Authorization: `Bearer ${this.apiKey}`,
                 "Content-Type": "application/json",
             },
-            body: JSON.stringify({
-                model: "text-embedding-v3",
-                input: text,
-                encoding_format: "float",
-                dimensions: 1024,
-            }),
+            body: JSON.stringify(body),
         });
         const data = (await response.json()) as { data?: { embedding: number[] }[] };
         if (!data.data?.[0]?.embedding) {

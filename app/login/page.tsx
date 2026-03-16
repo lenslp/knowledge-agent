@@ -50,7 +50,7 @@ export default function LoginPage() {
                 <div className="text-center mb-8">
                     <div className="flex items-center justify-center gap-2 mb-3">
                         <Sparkles className="w-6 h-6 text-[#d48c66]" />
-                        <h1 className="text-xl font-serif text-[#e7e7e4]">Antigravity Agent</h1>
+                        <h1 className="text-xl font-serif text-[#e7e7e4]">Knowledge Agent</h1>
                     </div>
                     <p className="text-sm text-gray-500">{isSignUp ? "创建账号" : "登录继续"}</p>
                 </div>

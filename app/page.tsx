@@ -382,7 +382,7 @@ export default function ChatPage() {
                         <div className="flex items-center gap-3">
                             <h1 className="text-lg font-serif tracking-tight text-[#e7e7e4] flex items-center gap-2">
                                 <Sparkles className="w-4 h-4 text-[#e7e7e4]/70" />
-                                Antigravity Search Agent
+                                Knowledge Agent
                             </h1>
                         </div>
                     </div>
@@ -399,7 +399,7 @@ export default function ChatPage() {
                             >
                                 <div className="text-4xl text-[#d48c66] mb-2 font-serif flex items-center gap-3">
                                     <Sparkles className="w-8 h-8" />
-                                    <span>Coffee and Claude time?</span>
+                                    <span>有什么可以帮你？</span>
                                 </div>
 
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-8 w-full max-w-2xl">

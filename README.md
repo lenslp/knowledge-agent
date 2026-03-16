@@ -1,70 +1,142 @@
-# Agent Demo
+# Knowledge Agent
 
-基于 Next.js + LangChain.js 构建的全栈 AI Agent 应用，支持联网搜索与 RAG 知识库检索。
+基于 Next.js + LangChain.js 构建的全栈 AI Agent 应用，支持多用户认证、联网搜索、RAG 知识库检索与图片理解。
+
+## 功能特性
+
+- 流式对话聊天，支持 Thinking Process 展示
+- Tavily 联网实时搜索
+- RAG 知识库检索，支持 txt / md / pdf / docx / json
+- 图片理解，支持粘贴 / 拖拽 / 点击上传（最多 4 张）
+- 多轮对话历史持久化
+- 知识库管理页面（上传、查看、删除、重新索引）
+- 用户认证（邮箱+密码 / Google OAuth）
+- 多用户数据隔离，对话和知识库按用户独立存储
+- 工具调用可视化（实时显示 Agent 正在调用的工具）
+- Mermaid 图表渲染、代码高亮、LaTeX 数学公式
 
 ## 技术栈
 
 - **前端**: Next.js 16 + React + Tailwind CSS 4
-- **后端**: LangChain.js + Vercel AI SDK
-- **大模型**: MiniMax M2.5（OpenAI 兼容接口）
-- **向量化**: MiniMax embo-01（1536 维）
+- **AI**: LangChain.js + Vercel AI SDK
 - **数据库**: Supabase PostgreSQL + pgvector + Prisma ORM
+- **认证**: Supabase Auth
 - **搜索**: Tavily Search API
 
-## 已实现功能
+## 模型支持
 
-- [x] 流式对话聊天（支持 Thinking Process 展示）
-- [x] Tavily 联网实时搜索
-- [x] RAG 知识库检索（支持 txt / md / pdf / docx / json）
-- [x] 多轮对话历史持久化（Supabase + Prisma）
-- [x] 对话列表侧边栏管理
-- [x] **知识库管理**：`/knowledge` 页面支持拖拽上传、查看已入库文档、删除、重新索引
+所有模型通过环境变量配置，支持任何 OpenAI 兼容接口。
+
+| 用途 | 环境变量 | 示例 |
+|------|---------|------|
+| 主对话模型 | `MODEL_NAME` + `OPENAI_BASE_URL` | qwen-plus, gpt-4o, deepseek-chat |
+| 视觉模型 | `VISION_MODEL_NAME` + `VISION_BASE_URL` | qwen-vl-plus, gpt-4o |
+| 向量嵌入 | `EMBEDDING_MODEL` + `EMBEDDING_BASE_URL` | text-embedding-v3, text-embedding-3-small |
+
+> 注意：更换向量嵌入模型时，若维度不同需重建数据库并重新上传知识库文件。
 
 ## 快速开始
 
+### 1. 安装依赖
+
 ```bash
-# 1. 安装依赖
 npm install
+```
 
-# 2. 配置环境变量（参考 .env.example）
+### 2. 配置环境变量
+
+```bash
 cp .env.example .env
+```
 
-# 3. 初始化数据库
-npx prisma db push
-npx tsx scripts/setup-db.ts
+编辑 `.env`，填入以下配置：
 
-# 4. 灌入知识库（将文件放入 knowledge/ 目录后执行）
-npx tsx scripts/ingest.ts
+```env
+# 主对话模型（OpenAI 兼容接口）
+OPENAI_API_KEY=your-api-key
+OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+MODEL_NAME=qwen-plus
 
-# 支持增量：未修改的文件会跳过，只处理新增或变更的文件（基于 SHA-256 哈希）
+# 视觉模型（用于图片理解）
+VISION_MODEL_NAME=qwen-vl-plus
+VISION_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+VISION_API_KEY=your-api-key
 
-# 或在浏览器中打开 /knowledge，通过拖拽上传并自动向量化
+# 向量嵌入模型（不填 BASE_URL/API_KEY 则复用主模型配置）
+EMBEDDING_MODEL=text-embedding-v3
+EMBEDDING_DIMENSIONS=1024
 
-# 5. 启动开发服务器
+# Tavily 联网搜索
+TAVILY_API_KEY=your-tavily-key
+
+# Supabase
+NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
+DATABASE_URL=postgresql://...
+```
+
+### 3. 初始化数据库
+
+在 Supabase 中启用 pgvector 扩展后执行：
+
+```bash
+npx dotenv -e .env -- npx tsx scripts/setup-db.ts
+```
+
+### 4. 配置 Supabase Auth
+
+- 在 Supabase 控制台开启 Email 认证
+- （可选）配置 Google OAuth：Authentication → Providers → Google
+
+### 5. 生成 Prisma Client
+
+```bash
+npx prisma generate
+```
+
+### 6. 启动开发服务器
+
+```bash
 npm run dev
 ```
 
-## 功能路线图（按优先级排序）
+访问 `http://localhost:3000`，注册账号后即可使用。
 
-### P0 - 核心体验优化
-- [x] **消息引用来源**：RAG 回答时标注文档出处（如"来源：xxx.pdf 第3页"），增强可信度
-- [x] **流式工具调用展示**：实时显示 Agent 当前正在调用的工具（🔍 搜索中 / 📚 检索知识库中）
-- [x] **Markdown 渲染增强**：支持代码语法高亮、表格渲染、LaTeX 数学公式
+## 项目结构
 
-### P1 - 知识库管理
-- [x] **前端文件上传**：界面添加拖拽上传按钮，自动触发向量化入库，免去命令行操作
-- [x] **知识库管理页面**：查看已入库文档列表，支持删除 / 更新 / 重新索引
-- [x] **增量更新**：通过文件哈希检查避免重复入库，只处理新增或修改的文件
+```
+app/
+  api/
+    chat/          # 主对话 API（Agent + 视觉）
+    chats/         # 对话列表 CRUD
+    knowledge/     # 知识库管理 API
+  login/           # 登录/注册页面
+  knowledge/       # 知识库管理页面
+  page.tsx         # 主聊天页面
+lib/
+  knowledge.ts     # 文件解析、向量化、嵌入模型
+  knowledge-db.ts  # 知识库数据库操作
+  supabase-*.ts    # Supabase 客户端封装
+prisma/
+  schema.prisma    # 数据库模型
+scripts/
+  setup-db.ts      # 数据库初始化脚本
+docs/
+  AUTH.md          # 认证实现文档
+  IMAGE_VISION.md  # 图片理解实现文档
+  API_DOCS.md      # API 文档
+```
 
-### P2 - Agent 能力扩展
-- [x] **图片理解**：接入多模态模型，支持用户上传图片提问
-- [ ] **代码执行工具**：让 Agent 可以编写并执行代码（数据分析、绘图等）
-- [ ] **分库管理**：支持创建多个知识库（如「HR 政策」「技术文档」），按主题分类检索
-- [ ] **MCP 工具集成**：接入日历、邮件、数据库查询等外部 MCP 服务
+## 文档
 
-### P3 - 生产化部署
-- [ ] **用户认证**：接入 Supabase Auth，不同用户拥有独立的对话和知识库
-- [ ] **Vercel 部署**：一键部署到 Vercel，公网可访问
-- [ ] **多轮上下文压缩**：对超长对话做摘要压缩，避免 token 溢出
-- [ ] **API 限流与监控**：防滥用限频 + 接入 LangSmith 追踪推理链路
-- [ ] **定时知识更新**：定期抓取指定网页内容，自动更新知识库
+- [用户认证](docs/AUTH.md)
+- [图片理解](docs/IMAGE_VISION.md)
+- [API 文档](docs/API_DOCS.md)
+
+## 路线图
+
+- [ ] 代码执行工具（数据分析、绘图）
+- [ ] MCP 工具集成（日历、邮件、数据库）
+- [ ] 多轮上下文压缩
+- [ ] Vercel 一键部署
+- [ ] API 限流与 LangSmith 追踪
