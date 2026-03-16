@@ -2,8 +2,8 @@
 
 import { useChat } from "ai/react";
 import Link from "next/link";
-import { Send, Bot, User, Loader2, Sparkles, Globe, Menu, Plus, MessageSquare, PanelLeftClose, PanelLeftOpen, BookOpen, Trash2 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Send, Bot, User, Loader2, Sparkles, Globe, Menu, Plus, MessageSquare, PanelLeftClose, PanelLeftOpen, BookOpen, Trash2, ImagePlus, X } from "lucide-react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -23,8 +23,12 @@ export default function ChatPage() {
     const [activeChatId, setActiveChatId] = useState<string | null>(null);
     const [pendingDeleteChatId, setPendingDeleteChatId] = useState<string | null>(null);
     const [isDeletingChat, setIsDeletingChat] = useState(false);
+    // 待发送的图片列表（base64 data URL）
+    const [pendingImages, setPendingImages] = useState<{ dataUrl: string; name: string }[]>([]);
+    const [chatError, setChatError] = useState<string | null>(null);
+    const imageInputRef = useRef<HTMLInputElement>(null);
 
-    const { messages, setMessages, input, handleInputChange, handleSubmit, isLoading, data, stop } =
+    const { messages, setMessages, input, handleInputChange, handleSubmit, append, isLoading, data, stop } =
         useChat({
             api: "/api/chat",
             body: {
@@ -41,6 +45,9 @@ export default function ChatPage() {
             onFinish: () => {
                 // Refresh chats list after a message finishes so new chats appear in sidebar
                 fetchChats();
+            },
+            onError: (err) => {
+                setChatError(err.message || "请求失败，请检查 API 配置");
             }
         });
 
@@ -75,7 +82,10 @@ export default function ChatPage() {
                 const formattedMessages = data.map((msg: any) => ({
                     id: msg.id,
                     role: msg.role,
-                    content: msg.content
+                    content: msg.content,
+                    annotations: msg.tool_invocations?.images
+                        ? msg.tool_invocations.images.map((url: string) => ({ type: "image", url }))
+                        : undefined,
                 }));
                 setMessages(formattedMessages);
             } catch (e) {
@@ -119,6 +129,68 @@ export default function ChatPage() {
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }, [messages]);
+
+    // 将 File 转为 base64 data URL
+    const fileToDataUrl = (file: File): Promise<string> =>
+        new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result as string);
+            reader.onerror = reject;
+            reader.readAsDataURL(file);
+        });
+
+    const addImages = useCallback(async (files: FileList | File[]) => {
+        const arr = Array.from(files).filter(f => f.type.startsWith("image/")).slice(0, 4);
+        const results = await Promise.all(arr.map(async f => ({ dataUrl: await fileToDataUrl(f), name: f.name })));
+        setPendingImages(prev => [...prev, ...results].slice(0, 4));
+    }, []);
+
+    // 粘贴图片
+    const handlePaste = useCallback((e: React.ClipboardEvent) => {
+        const imageFiles = Array.from(e.clipboardData.files).filter(f => f.type.startsWith("image/"));
+        if (imageFiles.length > 0) addImages(imageFiles);
+    }, [addImages]);
+
+    // 拖拽图片到输入框
+    const handleDrop = useCallback((e: React.DragEvent) => {
+        e.preventDefault();
+        const imageFiles = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith("image/"));
+        if (imageFiles.length > 0) addImages(imageFiles);
+    }, [addImages]);
+
+    // 自定义提交：若有图片则构造 multimodal content
+    const handleFormSubmit = useCallback((e: React.FormEvent) => {
+        e.preventDefault();
+        if (isLoading) { stop(); return; }
+        if (!input.trim() && pendingImages.length === 0) return;
+        setChatError(null);
+
+        if (pendingImages.length > 0) {
+            // 构造 multimodal content array（OpenAI vision 格式）
+            const imageContent: any[] = [];
+            if (input.trim()) imageContent.push({ type: "text", text: input.trim() });
+            pendingImages.forEach(img => {
+                imageContent.push({ type: "image_url", image_url: { url: img.dataUrl } });
+            });
+            // 用 append 发送，同时把 imageContent 放进 body 让后端处理
+            // 前端消息显示用 annotations 存图片 URL
+            append(
+                {
+                    role: "user",
+                    content: input.trim() || "（图片）",
+                    annotations: pendingImages.map(img => ({ type: "image", url: img.dataUrl })) as any,
+                },
+                {
+                    body: { chatId: activeChatId, imageContent },
+                }
+            );
+            // 清空 input
+            handleInputChange({ target: { value: "" } } as any);
+            setPendingImages([]);
+        } else {
+            handleSubmit(e);
+        }
+    }, [isLoading, stop, input, pendingImages, append, handleSubmit, handleInputChange, activeChatId]);
 
     return (
         <div className="flex h-screen bg-[#1e1e19] overflow-hidden text-[#ececec] w-full relative font-sans">
@@ -243,14 +315,6 @@ export default function ChatPage() {
                             </h1>
                         </div>
                     </div>
-
-                    {/* 特性展示徽章 */}
-                    <div className="hidden sm:flex items-center gap-4">
-                        <div className="flex items-center gap-2 text-xs font-semibold px-3 py-1.5 rounded-full border border-blue-500/30 bg-blue-500/10 text-blue-300">
-                            <Globe className="w-3.5 h-3.5" />
-                            <span>Tavily 实时搜索介入</span>
-                        </div>
-                    </div>
                 </header>
 
                 {/* 聊天内容区 */}
@@ -267,13 +331,13 @@ export default function ChatPage() {
                                     <span>Coffee and Claude time?</span>
                                 </div>
 
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-8 w-full max-w-lg">
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-8 w-full max-w-2xl">
                                     <div onClick={() => handleInputChange({ target: { value: "今天有什么重要的AI新闻？" } } as any)} className="p-4 rounded-xl bg-[#23221d] border border-white/5 hover:bg-[#2d2c25] cursor-pointer transition text-sm text-[#e7e7e4] flex items-center gap-3">
-                                        <Globe className="w-4 h-4 text-[#d48c66]" />
+                                        <Globe className="w-4 h-4 text-[#d48c66] shrink-0" />
                                         <p className="font-medium">今天有什么重要的AI新闻？</p>
                                     </div>
                                     <div onClick={() => handleInputChange({ target: { value: "Next.js 的 App Router 是什么？" } } as any)} className="p-4 rounded-xl bg-[#23221d] border border-white/5 hover:bg-[#2d2c25] cursor-pointer transition text-sm text-[#e7e7e4] flex items-center gap-3">
-                                        <Bot className="w-4 h-4 text-gray-400" />
+                                        <Bot className="w-4 h-4 text-gray-400 shrink-0" />
                                         <p className="font-medium">Next.js 的 App Router 是什么？</p>
                                     </div>
                                 </div>
@@ -359,7 +423,27 @@ export default function ChatPage() {
                                                 });
                                             })()}
                                             {m.role === "user" ? (
-                                                <div className="whitespace-pre-wrap">{m.content}</div>
+                                                <div className="prose prose-invert prose-sm sm:prose-base max-w-none 
+                                                    prose-p:leading-relaxed prose-p:mb-3 
+                                                    prose-img:max-h-60 prose-img:rounded-lg prose-img:object-contain prose-img:my-2
+                                                    break-words"
+                                                >
+                                                    {/* 渲染图片附件（存在 annotations 中） */}
+                                                    {(() => {
+                                                        const imgs = (m.annotations as any[])?.filter((a: any) => a?.type === "image");
+                                                        if (!imgs?.length) return null;
+                                                        return (
+                                                            <div className="flex flex-wrap gap-2 mb-2">
+                                                                {imgs.map((img: any, i: number) => (
+                                                                    <img key={i} src={img.url} alt="附件图片" className="max-h-48 max-w-xs rounded-xl object-cover border border-white/10" />
+                                                                ))}
+                                                            </div>
+                                                        );
+                                                    })()}
+                                                    <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+                                                        {typeof m.content === "string" ? m.content : (m.content as any[]).filter((p: any) => p.type === "text").map((p: any) => p.text).join(" ")}
+                                                    </ReactMarkdown>
+                                                </div>
                                             ) : (
                                                 (() => {
                                                     let mainContent = m.content;
@@ -481,38 +565,100 @@ export default function ChatPage() {
                         {/* Glass 模糊底板 */}
                         <div className="absolute inset-0 -bottom-8 rounded-[2rem] bg-gradient-to-t from-black/80 via-black/40 to-transparent blur-2xl pointer-events-none"></div>
 
+                        {/* 错误提示 */}
+                        <AnimatePresence>
+                            {chatError && (
+                                <motion.div
+                                    initial={{ opacity: 0, y: 8 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    exit={{ opacity: 0, y: 8 }}
+                                    className="mb-2 px-4 py-2.5 rounded-xl bg-red-500/10 border border-red-500/20 text-red-300 text-sm flex items-center justify-between gap-3"
+                                >
+                                    <span>{chatError}</span>
+                                    <button type="button" onClick={() => setChatError(null)} className="text-red-400 hover:text-red-200 flex-shrink-0">
+                                        <X className="w-4 h-4" />
+                                    </button>
+                                </motion.div>
+                            )}
+                        </AnimatePresence>
+
                         <form
-                            onSubmit={isLoading ? (e) => { e.preventDefault(); stop(); } : handleSubmit}
-                            className="relative flex items-center w-full rounded-2xl overflow-hidden bg-[#2f2e27] transition duration-300 border border-white/5 focus-within:border-white/20"
+                            onSubmit={handleFormSubmit}
+                            onDrop={handleDrop}
+                            onDragOver={(e) => e.preventDefault()}
+                            className="relative flex flex-col w-full rounded-2xl overflow-hidden bg-[#2f2e27] transition duration-300 border border-white/5 focus-within:border-white/20"
                         >
-                            <input
-                                className="flex-1 bg-transparent px-6 py-4 text-[#e7e7e4] placeholder:text-gray-500 focus:outline-none focus:ring-0 text-[15px]"
-                                value={input}
-                                placeholder="How can I help you today?"
-                                onChange={handleInputChange}
-                                disabled={isLoading}
-                            />
-                            <button
-                                type="submit"
-                                className={`m-2 p-2 rounded-lg transition-all relative ${
-                                    isLoading
-                                        ? "bg-white/10 hover:bg-white/20 text-white"
-                                        : "bg-[#534032] hover:bg-[#6c5442] text-[#d48c66] disabled:opacity-50 disabled:cursor-not-allowed"
-                                }`}
-                                disabled={!isLoading && !input}
-                            >
-                                {isLoading ? (
-                                    <>
-                                        {/* Claude 风格：外圆进度环 + 中间方形 Stop 图标 */}
-                                        <span className="absolute inset-0 rounded-lg border-2 border-white/30 animate-ping" />
-                                        <svg className="w-4 h-4 relative z-10" viewBox="0 0 16 16" fill="currentColor">
-                                            <rect x="3" y="3" width="10" height="10" rx="2" />
-                                        </svg>
-                                    </>
-                                ) : (
-                                    <Send className="w-4 h-4" />
-                                )}
-                            </button>
+                            {/* 图片预览区 */}
+                            {pendingImages.length > 0 && (
+                                <div className="flex flex-wrap gap-2 px-4 pt-3">
+                                    {pendingImages.map((img, i) => (
+                                        <div key={i} className="relative group">
+                                            <img
+                                                src={img.dataUrl}
+                                                alt={img.name}
+                                                className="h-16 w-16 object-cover rounded-xl border border-white/10"
+                                            />
+                                            <button
+                                                type="button"
+                                                onClick={() => setPendingImages(prev => prev.filter((_, idx) => idx !== i))}
+                                                className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-[#1e1e19] border border-white/20 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-500/30"
+                                            >
+                                                <X className="w-3 h-3 text-gray-300" />
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+
+                            <div className="flex items-center w-full">
+                                {/* 图片上传按钮 */}
+                                <button
+                                    type="button"
+                                    onClick={() => imageInputRef.current?.click()}
+                                    disabled={isLoading || pendingImages.length >= 4}
+                                    className="ml-3 p-2 rounded-lg text-gray-500 hover:text-gray-300 hover:bg-white/10 transition-colors disabled:opacity-30 disabled:cursor-not-allowed flex-shrink-0"
+                                    title="上传图片（最多4张）"
+                                >
+                                    <ImagePlus className="w-5 h-5" />
+                                </button>
+                                <input
+                                    ref={imageInputRef}
+                                    type="file"
+                                    accept="image/*"
+                                    multiple
+                                    className="hidden"
+                                    onChange={(e) => e.target.files && addImages(e.target.files)}
+                                />
+                                <input
+                                    className="flex-1 bg-transparent px-4 py-4 text-[#e7e7e4] placeholder:text-gray-500 focus:outline-none focus:ring-0 text-[15px]"
+                                    value={input}
+                                    placeholder="How can I help you today?"
+                                    onChange={handleInputChange}
+                                    onPaste={handlePaste}
+                                    disabled={isLoading}
+                                />
+                                <button
+                                    type="submit"
+                                    className={`m-2 p-2 rounded-lg transition-all relative ${
+                                        isLoading
+                                            ? "bg-white/10 hover:bg-white/20 text-white"
+                                            : "bg-[#534032] hover:bg-[#6c5442] text-[#d48c66] disabled:opacity-50 disabled:cursor-not-allowed"
+                                    }`}
+                                    disabled={!isLoading && !input && pendingImages.length === 0}
+                                >
+                                    {isLoading ? (
+                                        <>
+                                            {/* Claude 风格：外圆进度环 + 中间方形 Stop 图标 */}
+                                            <span className="absolute inset-0 rounded-lg border-2 border-white/30 animate-ping" />
+                                            <svg className="w-4 h-4 relative z-10" viewBox="0 0 16 16" fill="currentColor">
+                                                <rect x="3" y="3" width="10" height="10" rx="2" />
+                                            </svg>
+                                        </>
+                                    ) : (
+                                        <Send className="w-4 h-4" />
+                                    )}
+                                </button>
+                            </div>
                         </form>
                     </div>
                 </div>

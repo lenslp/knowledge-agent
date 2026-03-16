@@ -37,6 +37,7 @@ export async function POST(req: Request) {
         await upsertManifest(sourceLabel, fileHash);
         return NextResponse.json({ ok: true, filename, chunks });
     } catch (e: unknown) {
+        console.error("[upload error]", e);
         const message = e instanceof Error ? e.message : "Upload failed";
         return NextResponse.json({ error: message }, { status: 500 });
     }

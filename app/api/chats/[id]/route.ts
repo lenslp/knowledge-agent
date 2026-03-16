@@ -14,7 +14,7 @@ export async function GET(
         // Fetch messages for this specific chat, ordered by creation time
         const data = await prisma.message.findMany({
             where: { chat_id: chatId },
-            select: { id: true, role: true, content: true, created_at: true },
+            select: { id: true, role: true, content: true, tool_invocations: true, created_at: true },
             orderBy: { created_at: "asc" }
         });
 

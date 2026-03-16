@@ -4,12 +4,12 @@ import { TavilySearch } from "@langchain/tavily";
 import { createToolCallingAgent, AgentExecutor } from "@langchain/classic/agents";
 import { ChatPromptTemplate } from "@langchain/core/prompts";
 import { DynamicStructuredTool } from "@langchain/core/tools";
-import { Embeddings } from "@langchain/core/embeddings";
 import { SupabaseVectorStore } from "@langchain/community/vectorstores/supabase";
 import { createClient } from "@supabase/supabase-js";
 import { LangChainAdapter, StreamData } from "ai";
 import { z } from "zod";
 
+import { CustomMiniMaxEmbeddings } from "../../../lib/knowledge";
 import { prisma } from "../../../lib/prisma";
 
 // 允许最长 60 秒的请求，因为搜索可能较慢
@@ -17,7 +17,7 @@ export const maxDuration = 60;
 
 export async function POST(req: Request) {
     try {
-        const { messages, chatId } = await req.json();
+        const { messages, chatId, imageContent } = await req.json();
 
         if (!process.env.OPENAI_API_KEY || !process.env.TAVILY_API_KEY) {
             return new Response("Missing API Keys in .env", { status: 500 });
@@ -62,37 +62,8 @@ export async function POST(req: Request) {
                     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
                 );
 
-                class CustomMiniMaxEmbeddings extends Embeddings {
-                    async embedDocuments(texts: string[]): Promise<number[][]> {
-                        const results: number[][] = [];
-                        for (const text of texts) {
-                            const res = await this.embedQuery(text);
-                            results.push(res);
-                        }
-                        return results;
-                    }
-                    async embedQuery(text: string): Promise<number[]> {
-                        const response = await fetch("https://api.minimaxi.com/v1/embeddings", {
-                            method: "POST",
-                            headers: {
-                                "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
-                                "Content-Type": "application/json"
-                            },
-                            body: JSON.stringify({
-                                model: "embo-01",
-                                texts: [text],
-                                type: "db"
-                            })
-                        });
-                        const data = await response.json();
-                        if (!data.vectors || !data.vectors[0]) {
-                            throw new Error(`MiniMax API error: ${JSON.stringify(data)}`);
-                        }
-                        return data.vectors[0];
-                    }
-                }
                 const vectorStore = new SupabaseVectorStore(
-                    new CustomMiniMaxEmbeddings({}),
+                    new CustomMiniMaxEmbeddings(),
                     {
                         client: supabaseClient,
                         tableName: "documents",
@@ -161,30 +132,156 @@ export async function POST(req: Request) {
         });
 
         // 5. 将前端传入的 Vercel AI Messages 格式化为 LangChain 识别的历史消息
+        const lastMessage = messages[messages.length - 1];
+
+        // 检测是否有图片：优先用 imageContent（前端显式传入），其次检测 message content 数组
+        const multimodalContent = imageContent || (
+            Array.isArray(lastMessage?.content) &&
+            lastMessage.content.some((p: any) => p.type === "image_url" || p.type === "image")
+                ? lastMessage.content
+                : null
+        );
+        const hasImages = !!multimodalContent;
+
+        // 提取纯文本内容（用于存库和 title）
+        // 若有 imageContent（前端传入的 multimodal array），从中提取文本
+        const currentMessageText = imageContent
+            ? (imageContent as any[]).filter((p: any) => p.type === "text").map((p: any) => p.text).join(" ") || "（图片）"
+            : Array.isArray(lastMessage?.content)
+                ? lastMessage.content.filter((p: any) => p.type === "text").map((p: any) => p.text).join(" ")
+                : (lastMessage?.content ?? "");
+
         const previousMessages = messages
             .slice(0, -1)
-            .map((m: any) => [m.role === 'user' ? 'user' : 'ai', m.content]);
-
-        const currentMessageContent = messages[messages.length - 1].content;
+            .map((m: any) => [m.role === 'user' ? 'user' : 'ai',
+                Array.isArray(m.content)
+                    ? m.content.filter((p: any) => p.type === "text").map((p: any) => p.text).join(" ")
+                    : m.content
+            ]);
 
         let activeChatId = chatId;
 
         // 如果没有 chatId (新建对话)，先创建一条 chat 记录
         if (!activeChatId) {
             const newChat = await prisma.chat.create({
-                data: { title: currentMessageContent.slice(0, 30) }
+                data: { title: currentMessageText.slice(0, 30) || "图片对话" }
             });
             activeChatId = newChat.id;
         }
 
-        // 存储用户的消息到数据库
+        // 存储用户的消息到数据库（只存文本部分，图片 base64 存入 tool_invocations）
         await prisma.message.create({
             data: {
                 chat_id: activeChatId,
                 role: 'user',
-                content: currentMessageContent
+                content: currentMessageText,
+                tool_invocations: hasImages
+                    ? { images: (multimodalContent as any[]).filter((p: any) => p.type === "image_url").map((p: any) => p.image_url.url) }
+                    : undefined,
             }
         });
+
+        // 如果消息包含图片，直接用原生 fetch 调 OpenAI 兼容接口（精确控制 vision 格式）
+        if (hasImages) {
+            // 视觉模型可单独配置，默认 fallback 到主模型
+            const visionModel = process.env.VISION_MODEL_NAME || process.env.MODEL_NAME || "gpt-4o-mini";
+            const visionBaseUrl = process.env.VISION_BASE_URL || process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
+            const visionApiKey = process.env.VISION_API_KEY || process.env.OPENAI_API_KEY;
+
+            // 如果没有单独配置视觉模型，提示用户
+            if (!process.env.VISION_MODEL_NAME) {
+                return new Response(
+                    JSON.stringify({ error: "图片理解需要配置支持 vision 的模型。请在 .env 中设置 VISION_MODEL_NAME（如 gpt-4o-mini）、VISION_BASE_URL 和 VISION_API_KEY。MiniMax M2.5 不支持图片输入。" }),
+                    { status: 400, headers: { "Content-Type": "application/json" } }
+                );
+            }
+
+            const visionMessages = [
+                {
+                    role: "system",
+                    content: "你是一个强大且乐于助人的AI助手，擅长图片理解、OCR文字识别、图表分析等视觉任务。"
+                },
+                {
+                    role: "user",
+                    content: (multimodalContent as any[]).map((p: any) => {
+                        if (p.type === "text") return { type: "text", text: p.text };
+                        if (p.type === "image_url") return { type: "image_url", image_url: { url: p.image_url.url, detail: "auto" } };
+                        return p;
+                    })
+                }
+            ];
+
+            const visionResp = await fetch(`${visionBaseUrl}/chat/completions`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${visionApiKey}`,
+                },
+                body: JSON.stringify({
+                    model: visionModel,
+                    messages: visionMessages,
+                    stream: true,
+                    max_tokens: 2048,
+                }),
+            });
+
+            if (!visionResp.ok) {
+                const errText = await visionResp.text();
+                return new Response(`Vision API error: ${errText}`, { status: 500 });
+            }
+
+            // 透传 SSE 流，同时存库
+            const reader = visionResp.body!.getReader();
+            const decoder = new TextDecoder();
+            let fullText = "";
+
+            const readable = new ReadableStream({
+                async start(controller) {
+                    const encoder = new TextEncoder();
+                    try {
+                        while (true) {
+                            const { done, value } = await reader.read();
+                            if (done) break;
+                            const chunk = decoder.decode(value, { stream: true });
+                            // 解析 SSE 提取文本，同时透传给前端
+                            for (const line of chunk.split("\n")) {
+                                const trimmed = line.trim();
+                                if (!trimmed || trimmed === "data: [DONE]") continue;
+                                if (trimmed.startsWith("data: ")) {
+                                    try {
+                                        const json = JSON.parse(trimmed.slice(6));
+                                        const delta = json.choices?.[0]?.delta?.content;
+                                        if (delta) {
+                                            fullText += delta;
+                                            // 转为 Vercel AI SDK data stream 格式
+                                            controller.enqueue(encoder.encode(`0:${JSON.stringify(delta)}\n`));
+                                        }
+                                    } catch { /* skip malformed */ }
+                                }
+                            }
+                        }
+                        controller.enqueue(encoder.encode(`d:{"finishReason":"stop","usage":{"promptTokens":0,"completionTokens":0}}\n`));
+                        await prisma.message.create({
+                            data: { chat_id: activeChatId, role: "assistant", content: fullText }
+                        });
+                    } catch (err) {
+                        controller.error(err);
+                    } finally {
+                        controller.close();
+                    }
+                }
+            });
+
+            return new Response(readable, {
+                headers: {
+                    "Content-Type": "text/plain; charset=utf-8",
+                    "X-Vercel-AI-Data-Stream": "v1",
+                    "X-Chat-Id": activeChatId,
+                }
+            });
+        }
+
+        const currentMessageContent = currentMessageText;
 
         // 6. 执行流式事件响应，这是在生产环境中将 Agent 执行步骤抛给前端最健壮的方法
         const stream = await agentExecutor.streamEvents(

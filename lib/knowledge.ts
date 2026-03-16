@@ -110,13 +110,15 @@ export function getTextSplitter() {
     return textSplitter;
 }
 
-/** MiniMax embo-01 嵌入，供 ingest 与 API 共用 */
+/** 千问 text-embedding-v3 嵌入，供 ingest 与 API 共用 */
 export class CustomMiniMaxEmbeddings extends Embeddings {
     private apiKey: string;
+    private baseUrl: string;
 
     constructor(apiKey?: string) {
         super({});
         this.apiKey = apiKey ?? process.env.OPENAI_API_KEY ?? "";
+        this.baseUrl = process.env.OPENAI_BASE_URL ?? "https://dashscope.aliyuncs.com/compatible-mode/v1";
     }
 
     async embedDocuments(texts: string[]): Promise<number[][]> {
@@ -129,23 +131,24 @@ export class CustomMiniMaxEmbeddings extends Embeddings {
     }
 
     async embedQuery(text: string): Promise<number[]> {
-        const response = await fetch("https://api.minimaxi.com/v1/embeddings", {
+        const response = await fetch(`${this.baseUrl}/embeddings`, {
             method: "POST",
             headers: {
                 Authorization: `Bearer ${this.apiKey}`,
                 "Content-Type": "application/json",
             },
             body: JSON.stringify({
-                model: "embo-01",
-                texts: [text],
-                type: "db",
+                model: "text-embedding-v3",
+                input: text,
+                encoding_format: "float",
+                dimensions: 1024,
             }),
         });
-        const data = (await response.json()) as { vectors?: number[][] };
-        if (!data.vectors?.[0]) {
-            throw new Error(`MiniMax API error: ${JSON.stringify(data)}`);
+        const data = (await response.json()) as { data?: { embedding: number[] }[] };
+        if (!data.data?.[0]?.embedding) {
+            throw new Error(`Embedding API error: ${JSON.stringify(data)}`);
         }
-        return data.vectors[0];
+        return data.data[0].embedding;
     }
 }
 
