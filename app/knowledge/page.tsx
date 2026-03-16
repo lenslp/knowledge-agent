@@ -195,7 +195,7 @@ export default function KnowledgePage() {
                         </div>
                     ) : list.length === 0 ? (
                         <div className="rounded-2xl border border-white/5 bg-white/5 py-16 text-center text-gray-500 text-sm">
-                            暂无文档，请先上传或运行 <code className="px-1.5 py-0.5 rounded bg-white/10">npx tsx scripts/ingest.ts</code>
+                            暂无文档，请先上传
                         </div>
                     ) : (
                         <ul className="space-y-2">

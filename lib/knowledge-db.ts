@@ -1,46 +1,48 @@
 import * as path from "path";
 import { prisma } from "./prisma";
 
-/** 按 source 删除向量表中该文件的所有 chunk（metadata.source 精确匹配） */
-export async function deleteDocumentsBySource(source: string): Promise<number> {
+/** 按 source + user_id 删除向量表中该文件的所有 chunk */
+export async function deleteDocumentsBySource(source: string, userId: string): Promise<number> {
     const result = await prisma.$executeRawUnsafe(
-        `DELETE FROM documents WHERE metadata->>'source' = $1`,
-        source
+        `DELETE FROM documents WHERE metadata->>'source' = $1 AND metadata->>'user_id' = $2`,
+        source,
+        userId
     );
     return result as number;
 }
 
-/** 获取已记录的文件哈希（用于增量：未变更则跳过） */
-export async function getManifestHash(source: string): Promise<string | null> {
-    const row = await prisma.documentManifest.findUnique({
-        where: { source },
+/** 获取已记录的文件哈希 */
+export async function getManifestHash(source: string, userId: string): Promise<string | null> {
+    const row = await prisma.documentManifest.findFirst({
+        where: { source, user_id: userId },
         select: { file_hash: true },
     });
     return row?.file_hash ?? null;
 }
 
-/** 写入/更新 manifest（入库成功后调用） */
-export async function upsertManifest(source: string, fileHash: string): Promise<void> {
+/** 写入/更新 manifest */
+export async function upsertManifest(source: string, fileHash: string, userId: string): Promise<void> {
     await prisma.documentManifest.upsert({
-        where: { source },
-        create: { source, file_hash: fileHash },
+        where: { user_id_source: { user_id: userId, source } },
+        create: { source, file_hash: fileHash, user_id: userId },
         update: { file_hash: fileHash, updated_at: new Date() },
     });
 }
 
-/** 删除 manifest 记录（删除文档或向量后调用，便于下次重新入库） */
-export async function deleteManifestBySource(source: string): Promise<void> {
-    await prisma.documentManifest.deleteMany({ where: { source } });
+/** 删除 manifest 记录 */
+export async function deleteManifestBySource(source: string, userId: string): Promise<void> {
+    await prisma.documentManifest.deleteMany({ where: { source, user_id: userId } });
 }
 
-/** 列出知识库中按 source 聚合的文档（每条为同一 source 的 chunk 数） */
-export async function listKnowledgeSources(): Promise<
+/** 列出当前用户知识库中的文档 */
+export async function listKnowledgeSources(userId: string): Promise<
     { source: string; filename: string; chunkCount: number }[]
 > {
     const rows = await prisma.$queryRawUnsafe<
         { source: string; chunk_count: string }[]
     >(
-        `SELECT metadata->>'source' AS source, COUNT(*)::text AS chunk_count FROM documents GROUP BY metadata->>'source' ORDER BY source`
+        `SELECT metadata->>'source' AS source, COUNT(*)::text AS chunk_count FROM documents WHERE metadata->>'user_id' = $1 GROUP BY metadata->>'source' ORDER BY source`,
+        userId
     );
     return rows.map((r) => ({
         source: r.source,

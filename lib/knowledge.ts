@@ -176,11 +176,15 @@ export async function addDocumentsToVectorStore(docs: Document[]): Promise<void>
 export async function ingestOneFile(
     buffer: Buffer,
     filename: string,
-    options?: { sourceLabel?: string }
+    options?: { sourceLabel?: string; userId?: string }
 ): Promise<{ chunks: number }> {
     // 解析文件
     const doc = await parseFileToDocument(buffer, filename, options);
     if (!doc) throw new Error(`Unsupported file type: ${path.extname(filename)}`);
+    // 注入 user_id 到 metadata（用于知识库隔离）
+    if (options?.userId) {
+        doc.metadata = { ...doc.metadata, user_id: options.userId };
+    }
     // 分块
     const docs = await textSplitter.splitDocuments([doc]);
     // 向量化入库

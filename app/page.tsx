@@ -2,7 +2,7 @@
 
 import { useChat } from "ai/react";
 import Link from "next/link";
-import { Send, Bot, User, Loader2, Sparkles, Globe, Menu, Plus, MessageSquare, PanelLeftClose, PanelLeftOpen, BookOpen, Trash2, ImagePlus, X } from "lucide-react";
+import { Send, Bot, User, Loader2, Sparkles, Globe, Menu, Plus, MessageSquare, PanelLeftClose, PanelLeftOpen, BookOpen, Trash2, ImagePlus, X, LogOut, Settings } from "lucide-react";
 import { useEffect, useRef, useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import ReactMarkdown from "react-markdown";
@@ -13,20 +13,42 @@ import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import "katex/dist/katex.min.css";
 import MermaidChart from "./components/MermaidChart";
+import { getSupabaseBrowserClient } from "../lib/supabase-browser";
 
 export default function ChatPage() {
-    // Supabase client creation is usually done in a util, but for client components we can use createBrowserClient if we installed it.
-    // However, since we only set up server SSR client, we will fetch data from a new GET API route we'll create next, or directly using Next.js Server Actions.
-    // For now, let's setup the state to receive them.
     const [chats, setChats] = useState<{ id: string, title: string, created_at: string }[]>([]);
     const [isSidebarOpen, setIsSidebarOpen] = useState(true);
     const [activeChatId, setActiveChatId] = useState<string | null>(null);
     const [pendingDeleteChatId, setPendingDeleteChatId] = useState<string | null>(null);
     const [isDeletingChat, setIsDeletingChat] = useState(false);
-    // 待发送的图片列表（base64 data URL）
     const [pendingImages, setPendingImages] = useState<{ dataUrl: string; name: string }[]>([]);
     const [chatError, setChatError] = useState<string | null>(null);
+    const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+    const [user, setUser] = useState<{ email?: string | null } | null>(null);
     const imageInputRef = useRef<HTMLInputElement>(null);
+    const settingsRef = useRef<HTMLDivElement>(null);
+    const supabase = getSupabaseBrowserClient();
+
+    const handleSignOut = async () => {
+        await supabase.auth.signOut();
+        window.location.href = "/login";
+    };
+
+    // 获取当前用户信息
+    useEffect(() => {
+        supabase.auth.getUser().then(({ data }: { data: { user: { email?: string | null } | null } }) => setUser(data.user));
+    }, [supabase]);
+
+    // 点击外部关闭设置菜单
+    useEffect(() => {
+        const handleClickOutside = (e: MouseEvent) => {
+            if (settingsRef.current && !settingsRef.current.contains(e.target as Node)) {
+                setIsSettingsOpen(false);
+            }
+        };
+        document.addEventListener("mousedown", handleClickOutside);
+        return () => document.removeEventListener("mousedown", handleClickOutside);
+    }, []);
 
     const { messages, setMessages, input, handleInputChange, handleSubmit, append, isLoading, data, stop } =
         useChat({
@@ -214,7 +236,7 @@ export default function ChatPage() {
                                 </Link>
                             </div>
 
-                            <div className="flex flex-col flex-1 overflow-hidden">
+                        <div className="flex flex-col flex-1 overflow-hidden">
                                 <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-1 mb-3">历史记录</h2>
                                 <div className="flex-1 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
                                     {chats.map((chat) => (
@@ -248,6 +270,55 @@ export default function ChatPage() {
                                     ))}
                                 </div>
                             </div>
+
+                            {/* 用户信息栏 - Claude 风格 */}
+                            <div ref={settingsRef} className="relative mt-auto">
+                                <button
+                                    type="button"
+                                    onClick={() => setIsSettingsOpen(v => !v)}
+                                    className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-white/5 transition-colors group"
+                                >
+                                    {/* 头像缩写 */}
+                                    <div className="w-8 h-8 rounded-full bg-indigo-500/30 border border-indigo-400/30 flex items-center justify-center flex-shrink-0 text-indigo-300 text-sm font-semibold">
+                                        {user?.email?.[0]?.toUpperCase() ?? "?"}
+                                    </div>
+                                    <div className="flex-1 min-w-0 text-left">
+                                        <p className="text-sm text-[#e7e7e4] truncate font-medium">
+                                            {user?.email?.split("@")[0] ?? "用户"}
+                                        </p>
+                                        <p className="text-xs text-gray-500 truncate">{user?.email ?? ""}</p>
+                                    </div>
+                                    <Settings className="w-4 h-4 text-gray-500 group-hover:text-gray-300 transition-colors flex-shrink-0" />
+                                </button>
+
+                                <AnimatePresence>
+                                    {isSettingsOpen && (
+                                        <motion.div
+                                            initial={{ opacity: 0, y: 6 }}
+                                            animate={{ opacity: 1, y: 0 }}
+                                            exit={{ opacity: 0, y: 6 }}
+                                            transition={{ duration: 0.15 }}
+                                            className="absolute bottom-full left-0 right-0 mb-2 bg-[#2a2a24] border border-white/10 rounded-xl shadow-2xl overflow-hidden z-50"
+                                        >
+                                            {/* 邮箱展示 */}
+                                            <div className="px-4 py-3 border-b border-white/5">
+                                                <p className="text-xs text-gray-400 truncate">{user?.email}</p>
+                                            </div>
+                                            <div className="p-1">
+                                                <button
+                                                    type="button"
+                                                    onClick={handleSignOut}
+                                                    className="flex items-center gap-3 w-full px-3 py-2 rounded-lg text-gray-400 hover:text-red-300 hover:bg-red-500/10 transition-colors text-sm"
+                                                >
+                                                    <LogOut className="w-4 h-4" />
+                                                    退出登录
+                                                </button>
+                                            </div>
+                                        </motion.div>
+                                    )}
+                                </AnimatePresence>
+                            </div>
+
                         </div>
                     </motion.div>
                 )}

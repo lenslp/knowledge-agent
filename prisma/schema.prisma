@@ -1,5 +1,6 @@
 generator client {
   provider        = "prisma-client-js"
+  output          = "../node_modules/.prisma/client"
   previewFeatures = ["postgresqlExtensions"]
 }
 
@@ -11,6 +12,7 @@ datasource db {
 
 model Chat {
   id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id    String    @db.Uuid
   title      String    @default("New Chat")
   created_at DateTime  @default(now()) @db.Timestamptz(6)
   messages   Message[]
@@ -41,9 +43,11 @@ model Document {
 
 model DocumentManifest {
   id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  source     String   @unique
+  user_id    String   @db.Uuid
+  source     String
   file_hash  String
   updated_at DateTime @default(now()) @db.Timestamptz(6)
 
+  @@unique([user_id, source])
   @@map("document_manifests")
 }

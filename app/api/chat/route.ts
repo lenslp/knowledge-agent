@@ -11,12 +11,16 @@ import { z } from "zod";
 
 import { CustomMiniMaxEmbeddings } from "../../../lib/knowledge";
 import { prisma } from "../../../lib/prisma";
+import { getCurrentUser } from "../../../lib/supabase-server";
 
 // 允许最长 60 秒的请求，因为搜索可能较慢
 export const maxDuration = 60;
 
 export async function POST(req: Request) {
     try {
+        const user = await getCurrentUser();
+        if (!user) return new Response("Unauthorized", { status: 401 });
+
         const { messages, chatId, imageContent } = await req.json();
 
         if (!process.env.OPENAI_API_KEY || !process.env.TAVILY_API_KEY) {
@@ -71,13 +75,13 @@ export async function POST(req: Request) {
                     }
                 );
 
-                // 检索候选文档（多取一些以便按阈值过滤）
-                const SIMILARITY_THRESHOLD = 0.7; // 相似度阈值，低于此值的视为不相关
-                const candidates = await vectorStore.similaritySearchWithScore(query, 10);
+                // 检索候选文档，通过 filter 限定当前用户的知识库
+                const SIMILARITY_THRESHOLD = 0.7;
+                const candidates = await vectorStore.similaritySearchWithScore(query, 10, { user_id: user.id });
                 const relevantDocs = candidates
                     .filter(([, score]) => score >= SIMILARITY_THRESHOLD)
                     .map(([doc]) => doc)
-                    .slice(0, 5); // 过滤后最多保留 5 条
+                    .slice(0, 5);
                 if (relevantDocs.length === 0) {
                     return "知识库中未找到相关信息，请直接告知用户或尝试换个关键词搜索。";
                 }
@@ -164,7 +168,7 @@ export async function POST(req: Request) {
         // 如果没有 chatId (新建对话)，先创建一条 chat 记录
         if (!activeChatId) {
             const newChat = await prisma.chat.create({
-                data: { title: currentMessageText.slice(0, 30) || "图片对话" }
+                data: { title: currentMessageText.slice(0, 30) || "图片对话", user_id: user.id }
             });
             activeChatId = newChat.id;
         }
