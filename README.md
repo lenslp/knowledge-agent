@@ -107,24 +107,43 @@ npm run dev
 ```
 app/
   api/
-    chat/          # 主对话 API（Agent + 视觉）
-    chats/         # 对话列表 CRUD
-    knowledge/     # 知识库管理 API
-  login/           # 登录/注册页面
-  knowledge/       # 知识库管理页面
-  page.tsx         # 主聊天页面
+    chat/              # 主对话 API（Agent + Vision 分支）
+    chats/             # 对话列表 CRUD
+    chats/[id]/        # 单个对话详情/删除
+    knowledge/         # 知识库管理 API
+    knowledge/upload/  # 知识库文件上传
+    knowledge/reindex/ # 知识库重新索引
+  components/
+    ChatInput.tsx      # 聊天输入框（文本+图片上传）
+    ChatMessages.tsx   # 消息列表容器
+    ChatSidebar.tsx    # 侧边栏（对话列表+新建/切换/删除）
+    MessageBubble.tsx  # 单条消息气泡（Markdown渲染+图片）
+    ToolCallBubble.tsx # 工具调用状态气泡
+    DeleteConfirmDialog.tsx # 删除确认弹窗
+    MermaidChart.tsx   # Mermaid 图表渲染组件
+  login/               # 登录/注册页面
+  knowledge/           # 知识库管理页面
+  page.tsx             # 主聊天页面
+  layout.tsx           # 根布局
+  globals.css          # 全局样式
 lib/
-  knowledge.ts     # 文件解析、向量化、嵌入模型
-  knowledge-db.ts  # 知识库数据库操作
-  supabase-*.ts    # Supabase 客户端封装
+  agent.ts             # LangChain Agent 构建（LLM + Tools + Prompt）
+  chat-helpers.ts      # 消息解析、Chat 创建、消息存库
+  vision.ts            # 图片理解请求处理（Vision 模型调用+流转换）
+  knowledge.ts         # 文件解析、向量化、嵌入模型
+  knowledge-db.ts      # 知识库数据库操作
+  prisma.ts            # Prisma Client 单例
+  supabase-server.ts   # 服务端 Supabase 客户端 + getCurrentUser()
+  supabase-browser.ts  # 浏览器端 Supabase 单例
+middleware.ts          # 路由守卫（认证拦截）
 prisma/
-  schema.prisma    # 数据库模型
+  schema.prisma        # 数据库模型（Chat, Message, Document, DocumentManifest）
 scripts/
-  setup-db.ts      # 数据库初始化脚本
+  setup-db.ts          # 数据库初始化脚本
 docs/
-  AUTH.md          # 认证实现文档
-  IMAGE_VISION.md  # 图片理解实现文档
-  API_DOCS.md      # API 文档
+  AUTH.md              # 认证实现文档
+  IMAGE_VISION.md      # 图片理解实现文档
+  API_DOCS.md          # API 文档（LangChain & Vercel AI SDK 用法解析）
 ```
 
 ## 文档
