@@ -102,6 +102,32 @@ npm run dev
 
 访问 `http://localhost:3000`，注册账号后即可使用。
 
+## 测试
+
+### 组件测试
+
+```bash
+npm test
+```
+
+### E2E 测试
+
+首次运行需要安装 Playwright 浏览器：
+
+```bash
+npx playwright install chromium
+```
+
+常用命令：
+
+```bash
+npm run test:e2e
+npm run test:e2e:headed
+npm run test:e2e:demo
+```
+
+更完整的测试分层与约定见：`docs/TESTING.md`
+
 ## 项目结构
 
 ```
@@ -126,6 +152,8 @@ app/
   page.tsx             # 主聊天页面
   layout.tsx           # 根布局
   globals.css          # 全局样式
+e2e/
+  login.spec.ts        # 登录页浏览器端到端测试
 lib/
   agent.ts             # LangChain Agent 构建（LLM + Tools + Prompt）
   chat-helpers.ts      # 消息解析、Chat 创建、消息存库
@@ -135,15 +163,20 @@ lib/
   prisma.ts            # Prisma Client 单例
   supabase-server.ts   # 服务端 Supabase 客户端 + getCurrentUser()
   supabase-browser.ts  # 浏览器端 Supabase 单例
-middleware.ts          # 路由守卫（认证拦截）
+proxy.ts               # 路由守卫（认证拦截 / E2E 测试模式绕过）
 prisma/
   schema.prisma        # 数据库模型（Chat, Message, Document, DocumentManifest）
 scripts/
   setup-db.ts          # 数据库初始化脚本
+tests/
+  setup.ts             # Vitest 初始化
 docs/
   AUTH.md              # 认证实现文档
   IMAGE_VISION.md      # 图片理解实现文档
   API_DOCS.md          # API 文档（LangChain & Vercel AI SDK 用法解析）
+  TESTING.md           # 自动化测试方案
+playwright.config.ts   # Playwright 配置
+vitest.config.ts       # Vitest 配置
 ```
 
 ## 文档
@@ -151,6 +184,7 @@ docs/
 - [用户认证](docs/AUTH.md)
 - [图片理解](docs/IMAGE_VISION.md)
 - [API 文档](docs/API_DOCS.md)
+- [自动化测试方案](docs/TESTING.md)
 
 ## 路线图
 
