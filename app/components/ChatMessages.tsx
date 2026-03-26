@@ -11,10 +11,19 @@ interface ChatMessagesProps {
     messages: Message[];
     isLoading: boolean;
     onSuggestionClick: (text: string) => void;
+    onRegenerate: (messageId: string) => Promise<void>;
+    onEditAndResend: (messageId: string, content: string) => Promise<void>;
 }
 
-export default function ChatMessages({ messages, isLoading, onSuggestionClick }: ChatMessagesProps) {
+export default function ChatMessages({
+    messages,
+    isLoading,
+    onSuggestionClick,
+    onRegenerate,
+    onEditAndResend,
+}: ChatMessagesProps) {
     const messagesEndRef = useRef<HTMLDivElement>(null);
+    const latestAssistantId = [...messages].reverse().find((message) => message.role === "assistant")?.id;
 
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -48,7 +57,15 @@ export default function ChatMessages({ messages, isLoading, onSuggestionClick }:
                 ) : (
                     <AnimatePresence>
                         {messages.map((m) => (
-                            <MessageBubble key={m.id} message={m} />
+                            <MessageBubble
+                                key={m.id}
+                                message={m}
+                                canRegenerate={!isLoading && m.id === latestAssistantId}
+                                canEditAndResend={m.role === "user" && !isLoading}
+                                isLoading={isLoading}
+                                onRegenerate={onRegenerate}
+                                onEditAndResend={onEditAndResend}
+                            />
                         ))}
                     </AnimatePresence>
                 )}

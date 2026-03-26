@@ -1,8 +1,15 @@
-import { LangChainAdapter, StreamData } from "ai";
+import { LangChainAdapter, StreamData, type JSONValue } from "ai";
 
 import { createAgentExecutor } from "../../../lib/agent";
 import { handleVisionRequest } from "../../../lib/vision";
-import { parseMessageContent, ensureChatExists, saveMessage } from "../../../lib/chat-helpers";
+import {
+    parseMessageContent,
+    ensureChatExists,
+    replaceChatMessagesFromId,
+    saveMessage,
+    updateChatTitle,
+} from "../../../lib/chat-helpers";
+import { mergeKnowledgeSources, parseKnowledgeSearchToolOutput } from "../../../lib/knowledge-sources";
 import { getCurrentUser } from "../../../lib/supabase-server";
 
 export const maxDuration = 60;
@@ -12,7 +19,13 @@ export async function POST(req: Request) {
         const user = await getCurrentUser();
         if (!user) return new Response("Unauthorized", { status: 401 });
 
-        const { messages, chatId, imageContent } = await req.json();
+        const {
+            messages,
+            chatId,
+            imageContent,
+            replaceMessagesFromId,
+            skipSavingUserMessage,
+        } = await req.json();
 
         if (!process.env.OPENAI_API_KEY || !process.env.TAVILY_API_KEY) {
             return new Response("Missing API Keys in .env", { status: 500 });
@@ -24,13 +37,25 @@ export async function POST(req: Request) {
 
         // 确保 Chat 存在
         const activeChatId = await ensureChatExists(chatId, user.id, currentMessageText);
+        let removedFirstMessage = false;
+
+        if (typeof replaceMessagesFromId === "string" && replaceMessagesFromId) {
+            const replaceResult = await replaceChatMessagesFromId(activeChatId, user.id, replaceMessagesFromId);
+            removedFirstMessage = replaceResult.removedFirstMessage;
+        }
 
         // 存储用户消息
-        await saveMessage(activeChatId, "user", currentMessageText, {
-            tool_invocations: hasImages
-                ? { images: (multimodalContent as any[]).filter((p: any) => p.type === "image_url").map((p: any) => p.image_url.url) }
-                : undefined,
-        });
+        if (!skipSavingUserMessage) {
+            await saveMessage(activeChatId, "user", currentMessageText, {
+                tool_invocations: hasImages
+                    ? { images: (multimodalContent as any[]).filter((p: any) => p.type === "image_url").map((p: any) => p.image_url.url) }
+                    : undefined,
+            });
+
+            if (removedFirstMessage) {
+                await updateChatTitle(activeChatId, user.id, currentMessageText);
+            }
+        }
 
         // 图片消息走 Vision 分支
         if (hasImages) {
@@ -46,6 +71,7 @@ export async function POST(req: Request) {
         );
 
         const data = new StreamData();
+        let collectedKnowledgeSources = [] as ReturnType<typeof parseKnowledgeSearchToolOutput>;
 
         function interceptStream() {
             const iterator = stream[Symbol.asyncIterator]();
@@ -74,6 +100,23 @@ export async function POST(req: Request) {
                             });
                         }
                         if (event.event === "on_tool_end") {
+                            const knowledgeSources =
+                                event.name === "knowledge_search"
+                                    ? parseKnowledgeSearchToolOutput(event.data?.output)
+                                    : [];
+
+                            if (knowledgeSources.length > 0) {
+                                collectedKnowledgeSources = mergeKnowledgeSources([
+                                    ...collectedKnowledgeSources,
+                                    ...knowledgeSources,
+                                ]);
+                                data.appendMessageAnnotation({
+                                    type: "knowledge_sources",
+                                    sources: knowledgeSources as unknown as JSONValue[],
+                                    id: `knowledge-${event.run_id}`,
+                                });
+                            }
+
                             data.appendMessageAnnotation({
                                 type: "tool_call",
                                 toolName: event.name,
@@ -100,12 +143,20 @@ export async function POST(req: Request) {
             init: { headers: { "X-Chat-Id": activeChatId } },
             callbacks: {
                 async onFinal(completion) {
-                    await saveMessage(activeChatId, "assistant", completion);
+                    await saveMessage(activeChatId, "assistant", completion, {
+                        tool_invocations:
+                            collectedKnowledgeSources.length > 0
+                                ? { knowledge_sources: collectedKnowledgeSources }
+                                : undefined,
+                    });
                 }
             }
         });
 
-    } catch (e: any) {
-        return new Response(e.message, { status: 500 });
+    } catch (e: unknown) {
+        return new Response(
+            e instanceof Error ? e.message : "Chat request failed",
+            { status: 500 }
+        );
     }
 }

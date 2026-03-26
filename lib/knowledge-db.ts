@@ -50,3 +50,29 @@ export async function listKnowledgeSources(userId: string): Promise<
         chunkCount: parseInt(r.chunk_count, 10) || 0,
     }));
 }
+
+export async function getKnowledgeSourceDetail(
+    source: string,
+    userId: string
+): Promise<{
+    source: string;
+    filename: string;
+    chunks: { content: string }[];
+} | null> {
+    const rows = await prisma.$queryRawUnsafe<
+        { content: string }[]
+    >(
+        `SELECT content FROM documents
+         WHERE metadata->>'source' = $1 AND metadata->>'user_id' = $2`,
+        source,
+        userId
+    );
+
+    if (rows.length === 0) return null;
+
+    return {
+        source,
+        filename: path.basename(source),
+        chunks: rows,
+    };
+}

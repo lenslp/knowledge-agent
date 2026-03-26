@@ -9,6 +9,7 @@ import { createClient } from "@supabase/supabase-js";
 import { z } from "zod";
 
 import { CustomMiniMaxEmbeddings } from "./knowledge";
+import { mergeKnowledgeSources, type KnowledgeSourceSnippet } from "./knowledge-sources";
 
 /** 创建 LLM 实例 */
 function createLLM() {
@@ -71,12 +72,31 @@ function createKnowledgeSearchTool(userId: string) {
                 return "知识库中未找到相关信息，请直接告知用户或尝试换个关键词搜索。";
             }
 
-            return relevantDocs.map((doc, idx) => {
+            const sources = mergeKnowledgeSources(
+                relevantDocs.map((doc) => ({
+                    source: doc.metadata?.source ?? "未知来源",
+                    filename: doc.metadata?.source
+                        ? path.basename(doc.metadata.source)
+                        : "未知来源",
+                    snippet: doc.pageContent.trim(),
+                } satisfies KnowledgeSourceSnippet))
+            );
+
+            const context = relevantDocs.map((doc, idx) => {
                 const source = doc.metadata?.source
                     ? path.basename(doc.metadata.source)
                     : "未知来源";
                 return `片段 ${idx + 1}（来源：${source}）:\n${doc.pageContent}`;
-            }).join("\n\n---\n\n") + "\n\n⚠️ 请你在回答的最后，务必原样附上以下引用来源行：\n> 📄 来源：" + [...new Set(relevantDocs.map(doc => doc.metadata?.source ? path.basename(doc.metadata.source) : "未知来源"))].join(", ");
+            }).join("\n\n---\n\n");
+
+            return JSON.stringify(
+                {
+                    context,
+                    sources,
+                },
+                null,
+                2
+            );
         }
     });
 }
@@ -94,9 +114,10 @@ function buildPrompt() {
         ["system", `你是一个强大且乐于助人的AI助手。
 当前时间是：${currentDate}。
 【重要】优先使用 knowledge_search 检索知识库：用户问的产品教程、软件用法、文档说明等，若知识库中可能包含，必须先查知识库。只有知识库无结果或问题明显需要最新实时信息时，才使用联网搜索。
-当你使用 knowledge_search 工具获取到知识库信息时，请在回答末尾附上引用来源，格式如下：
-> 📄 来源：文件名1, 文件名2
-请务必保留此引用格式，帮助用户追溯信息出处。
+当你使用 knowledge_search 工具时，工具返回的是 JSON，其中包含：
+- context：可直接用于回答的知识库片段
+- sources：来源文件与原文片段
+请优先基于 context 回答，不要原样输出整段 JSON，也不要额外生成固定格式的“📄 来源”尾注；前端会自动展示可点击的来源片段。
 当需要绘制流程图、架构图、时序图等图表时，请始终使用 Mermaid 语法，格式如下：
 \`\`\`mermaid
 图表内容

@@ -11,6 +11,18 @@ import ChatSidebar from "./components/ChatSidebar";
 import DeleteConfirmDialog from "./components/DeleteConfirmDialog";
 import ChatMessages from "./components/ChatMessages";
 import ChatInput from "./components/ChatInput";
+import type { JSONValue, Message } from "ai";
+import type { KnowledgeSourceSnippet } from "../lib/knowledge-sources";
+
+interface StoredChatMessage {
+    id: string;
+    role: Message["role"];
+    content: string;
+    tool_invocations?: {
+        images?: string[];
+        knowledge_sources?: KnowledgeSourceSnippet[];
+    };
+}
 
 export default function ChatPage() {
     const [chats, setChats] = useState<{ id: string; title: string; created_at: string }[]>([]);
@@ -35,7 +47,7 @@ export default function ChatPage() {
     }, [supabase]);
 
     // ── Chat hook ──
-    const { messages, setMessages, input, handleInputChange, handleSubmit, append, isLoading, stop } =
+    const { messages, setMessages, input, handleInputChange, handleSubmit, append, reload, isLoading, stop } =
         useChat({
             api: "/api/chat",
             body: { chatId: activeChatId },
@@ -68,14 +80,22 @@ export default function ChatPage() {
         if (chatId) {
             try {
                 const res = await fetch(`/api/chats/${chatId}`);
-                const data = await res.json();
-                setMessages(data.map((msg: any) => ({
+                const data = (await res.json()) as StoredChatMessage[];
+                setMessages(data.map((msg) => ({
                     id: msg.id,
                     role: msg.role,
                     content: msg.content,
-                    annotations: msg.tool_invocations?.images
-                        ? msg.tool_invocations.images.map((url: string) => ({ type: "image", url }))
-                        : undefined,
+                    annotations: [
+                        ...(msg.tool_invocations?.images?.map((url) => ({ type: "image", url })) ?? []),
+                        ...(
+                            msg.tool_invocations?.knowledge_sources?.length
+                                ? [{
+                                    type: "knowledge_sources",
+                                    sources: msg.tool_invocations.knowledge_sources as unknown as JSONValue[],
+                                }]
+                                : []
+                        ),
+                    ],
                 })));
             } catch (e) {
                 console.error(e);
@@ -155,6 +175,45 @@ export default function ChatPage() {
         }
     }, [isLoading, stop, input, pendingImages, append, handleSubmit, handleInputChange, activeChatId]);
 
+    const handleRegenerate = useCallback(async (messageId: string) => {
+        if (!activeChatId) return;
+
+        setChatError(null);
+        await reload({
+            body: {
+                chatId: activeChatId,
+                replaceMessagesFromId: messageId,
+                skipSavingUserMessage: true,
+            },
+        });
+    }, [activeChatId, reload]);
+
+    const handleEditAndResend = useCallback(async (messageId: string, content: string) => {
+        const trimmedContent = content.trim();
+        if (!trimmedContent) return;
+
+        const targetIndex = messages.findIndex((message) => message.id === messageId);
+        if (targetIndex === -1) return;
+
+        const nextMessages = messages
+            .slice(0, targetIndex + 1)
+            .map((message, index) => (
+                index === targetIndex
+                    ? { ...message, content: trimmedContent }
+                    : message
+            ));
+
+        setMessages(nextMessages);
+        setChatError(null);
+
+        await reload({
+            body: {
+                chatId: activeChatId,
+                replaceMessagesFromId: messageId,
+            },
+        });
+    }, [activeChatId, messages, reload, setMessages]);
+
     // ── Render ──
     return (
         <div className="flex h-screen bg-[#1e1e19] overflow-hidden text-[#ececec] w-full relative font-sans">
@@ -214,6 +273,8 @@ export default function ChatPage() {
                     messages={messages}
                     isLoading={isLoading}
                     onSuggestionClick={(text) => handleInputChange({ target: { value: text } } as any)}
+                    onRegenerate={handleRegenerate}
+                    onEditAndResend={handleEditAndResend}
                 />
 
                 <ChatInput
